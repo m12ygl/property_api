@@ -1,13 +1,23 @@
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
+from typing import Optional
 import requests
 from bs4 import BeautifulSoup
+import urllib.parse
 
 app = FastAPI()
 
 @app.get("/search-properties")
-def get_rightmove_listings():
-    url = "https://www.rightmove.co.uk/property-for-sale/find.html?locationIdentifier=REGION%5E87490&minBedrooms=1&maxPrice=200000&radius=40&sortType=6&index=0"
+def get_rightmove_listings(location: str = "London", max_price: Optional[int] = None):
+    # Encode location and construct search URL
+    location_encoded = urllib.parse.quote(location)
+    base_url = "https://www.rightmove.co.uk/property-for-sale/find.html"
+    query_params = f"?locationIdentifier=OUTCODE%5E{location_encoded}&minBedrooms=1&radius=10&sortType=6&index=0"
+
+    if max_price:
+        query_params += f"&maxPrice={max_price}"
+
+    url = base_url + query_params
     headers = {"User-Agent": "Mozilla/5.0"}
     listings = []
 
@@ -31,11 +41,14 @@ def get_rightmove_listings():
             image_tag = prop.find("img", class_="propertyCard-img")
             image = image_tag['src'] if image_tag and 'src' in image_tag.attrs else ""
 
+            summary = f"• {title}\n• Price: {price}\n• Link: {link}"
+
             listings.append({
                 "title": title,
                 "price": price,
                 "url": link,
-                "image": image
+                "image": image,
+                "summary": summary
             })
 
     except Exception as e:
