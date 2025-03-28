@@ -1,7 +1,11 @@
+import subprocess
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 import asyncio
+
+# ✅ Ensure Chromium is installed at runtime
+subprocess.run(["playwright", "install", "chromium"])
 
 app = FastAPI()
 
