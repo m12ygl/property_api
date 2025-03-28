@@ -1,10 +1,10 @@
 
 import subprocess
-import uvicorn
-from fastapi import FastAPI, Query
-from playwright.async_api import async_playwright
 import asyncio
+from fastapi import FastAPI, Query
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
+# Ensure Chromium is installed
 subprocess.run(["playwright", "install", "chromium"])
 
 app = FastAPI()
@@ -16,6 +16,7 @@ async def search_properties(town: str = Query(..., description="The town to sear
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
             page = await context.new_page()
+
             await page.goto("https://www.rightmove.co.uk/")
 
             # Wait for and fill the search input
@@ -25,30 +26,32 @@ async def search_properties(town: str = Query(..., description="The town to sear
             await page.keyboard.press("ArrowDown")
             await page.keyboard.press("Enter")
 
-    # Accept cookies if the popup appears
-        try:
-            accept_button = await page.wait_for_selector("button#onetrust-accept-btn-handler", timeout=5000)
-            await accept_button.click()
-            print("Accepted cookie popup.")
-        except:
+            # Accept cookies if the popup appears
+            try:
+                accept_button = await page.wait_for_selector("button#onetrust-accept-btn-handler", timeout=5000)
+                await accept_button.click()
+                print("Accepted cookie popup.")
+            except:
                 print("No cookie popup detected.")
 
-
-            # Click "For Sale" to start search
+            # Click "For Sale"
             await page.wait_for_selector("button:has-text('For sale')", timeout=5000)
             await page.click("button:has-text('For sale')")
 
+            # Wait for property cards
             await page.wait_for_selector(".propertyCard-wrapper", timeout=15000)
-            cards = await page.query_selector_all(".propertyCard-wrapper")
+            property_elements = await page.query_selector_all(".propertyCard-wrapper")
 
-            results = []
-            for card in cards:
+            properties = []
+            for card in property_elements:
                 title = await card.inner_text()
-                results.append({"text": title})
+                properties.append(title.strip())
 
             await browser.close()
-            return results
+            return {"results": properties[:10]}  # return first 10 for brevity
 
+    except PlaywrightTimeout as e:
+        return {"error": f"Timeout: {str(e)}"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -60,19 +63,17 @@ async def view_source(town: str = Query(...)):
             context = await browser.new_context()
             page = await context.new_page()
             await page.goto("https://www.rightmove.co.uk/")
+
             await page.wait_for_selector("input#ta_searchInput", timeout=15000)
             await page.fill("input#ta_searchInput", town)
             await page.wait_for_timeout(1000)
             await page.keyboard.press("ArrowDown")
             await page.keyboard.press("Enter")
-            await page.wait_for_selector("button:has-text('For sale')", timeout=5000)
-            await page.click("button:has-text('For sale')")
-            await page.wait_for_load_state("networkidle")
-            content = await page.content()
+
+            await page.wait_for_timeout(3000)
+            html = await page.content()
             await browser.close()
-            return {"html": content}
+            return {"html": html[:3000]}  # Return first 3,000 characters for debugging
+
     except Exception as e:
         return {"error": str(e)}
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=10000)
