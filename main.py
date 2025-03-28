@@ -4,19 +4,37 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse
 from typing import Optional
 from playwright.sync_api import sync_playwright, TimeoutError
+import requests
 
-# Install Chromium
+# Ensure Chromium is installed
 subprocess.run(["playwright", "install", "chromium"])
 
 app = FastAPI()
+
+def get_location_identifier(postcode: str) -> Optional[str]:
+    url = "https://www.rightmove.co.uk/typeAhead/uknostreet/"
+    params = {"searchLocation": postcode}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        results = response.json()
+        if results and "locations" in results and len(results["locations"]) > 0:
+            return results["locations"][0]["locationIdentifier"]
+    except Exception as e:
+        print("Location lookup failed:", str(e))
+    return None
 
 @app.get("/")
 def home():
     return {"message": "Welcome to the Property Scout API. Use /search-properties."}
 
 @app.get("/search-properties")
-def search_properties(location: str = "London", max_price: Optional[int] = None):
+def search_properties(location: str = "NW10", max_price: Optional[int] = None):
     listings = []
+    location_id = get_location_identifier(location)
+
+    if not location_id:
+        return {"error": f"Could not find a locationIdentifier for '{location}'"}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
@@ -26,23 +44,22 @@ def search_properties(location: str = "London", max_price: Optional[int] = None)
         )
         page = context.new_page()
 
-        search_url = f"https://www.rightmove.co.uk/property-for-sale/find.html?searchLocation={location}&radius=5&minBedrooms=1&sortType=6&index=0"
+        search_url = f"https://www.rightmove.co.uk/property-for-sale/find.html?locationIdentifier={location_id}&radius=5&minBedrooms=1&sortType=6&index=0"
         if max_price:
             search_url += f"&maxPrice={max_price}"
 
         try:
             page.goto(search_url, timeout=60000)
 
-            # Accept cookies
+            # Accept cookies if present
             try:
                 page.wait_for_selector("button#onetrust-accept-btn-handler", timeout=5000)
                 page.click("button#onetrust-accept-btn-handler")
             except TimeoutError:
                 pass
 
-            # Try to wait for listings
+            # Wait for listings to load
             page.wait_for_selector(".propertyCard-wrapper", timeout=30000)
-
             cards = page.query_selector_all(".propertyCard-wrapper")
 
             for card in cards[:10]:
