@@ -25,6 +25,14 @@ async def search_properties(town: str = Query(..., description="The town to sear
             await page.keyboard.press("ArrowDown")
             await page.keyboard.press("Enter")
 
+            # Accept cookies if the popup appears
+try:
+    accept_button = await page.wait_for_selector("button#onetrust-accept-btn-handler", timeout=5000)
+    await accept_button.click()
+    print("Accepted cookie popup.")
+except:
+    print("No cookie popup detected.")
+
             # Click "For Sale" to start search
             await page.wait_for_selector("button:has-text('For sale')", timeout=5000)
             await page.click("button:has-text('For sale')")
