@@ -1,59 +1,42 @@
 import subprocess
+import asyncio
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-import asyncio
+from playwright.async_api import async_playwright
 
-# ✅ Ensure Chromium is installed at runtime
 subprocess.run(["playwright", "install", "chromium"])
 
 app = FastAPI()
 
-@app.get("/")
-def read_root():
-    return {"message": "UK Property Search API is running."}
-
 @app.get("/search-properties")
-async def search_properties(town: str = Query(..., description="Town name, e.g., Harrow")):
-    url = f"https://www.rightmove.co.uk/property-for-sale/{town}.html"
-
+async def search_properties(town: str = Query(..., description="Town name to search properties in")):
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch()
             page = await browser.new_page()
+            url = f"https://www.rightmove.co.uk/property-for-sale/{town}.html"
             await page.goto(url, timeout=60000)
-
             await page.wait_for_selector(".propertyCard-wrapper", timeout=30000)
 
-            properties = await page.locator(".propertyCard-wrapper").all()
-            results = []
+            property_cards = await page.locator(".propertyCard-wrapper").all()
+            properties = []
 
-            for property_card in properties[:10]:
-                try:
-                    title = await property_card.locator(".propertyCard-title").inner_text()
-                except:
-                    title = "No title found"
+            for card in property_cards[:10]:
+                title = await card.locator(".propertyCard-title").inner_text() if await card.locator(".propertyCard-title").count() else "No title"
+                price = await card.locator(".propertyCard-priceValue").inner_text() if await card.locator(".propertyCard-priceValue").count() else "No price"
+                location = await card.locator(".propertyCard-address").inner_text() if await card.locator(".propertyCard-address").count() else "No location"
+                link = await card.locator("a").get_attribute("href") if await card.locator("a").count() else None
+                full_link = f"https://www.rightmove.co.uk{link}" if link else None
 
-                try:
-                    price = await property_card.locator(".propertyCard-priceValue").inner_text()
-                except:
-                    price = "No price listed"
-
-                try:
-                    address = await property_card.locator(".propertyCard-address").inner_text()
-                except:
-                    address = "No address found"
-
-                results.append({
+                properties.append({
                     "title": title.strip(),
                     "price": price.strip(),
-                    "address": address.strip()
+                    "location": location.strip(),
+                    "link": full_link
                 })
 
             await browser.close()
-            return results
+            return {"results": properties}
 
-    except PlaywrightTimeout:
-        return JSONResponse(status_code=504, content={"error": "Timeout waiting for property cards."})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
