@@ -1,74 +1,69 @@
-import subprocess
-subprocess.run(["playwright", "install", "chromium"])
 
+import subprocess
+import uvicorn
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse, HTMLResponse
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
+import asyncio
+
+subprocess.run(["playwright", "install", "chromium"])
 
 app = FastAPI()
 
 @app.get("/search-properties")
-async def search_properties(town: str = Query(..., description="Town to search in")):
+async def search_properties(town: str = Query(..., description="The town to search properties in")):
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto("https://www.rightmove.co.uk/", timeout=60000)
+            context = await browser.new_context()
+            page = await context.new_page()
+            await page.goto("https://www.rightmove.co.uk/")
 
-            # Ensure the input is present before trying to type
-            await page.wait_for_selector("input#searchLocation", timeout=15000)
-            await page.fill("input#searchLocation", town)
-
-            # Wait for the autocomplete dropdown and select the first item
-            await page.wait_for_selector(".autoCompleteItem", timeout=10000)
+            # Wait for and fill the search input
+            await page.wait_for_selector("input#ta_searchInput", timeout=15000)
+            await page.fill("input#ta_searchInput", town)
+            await page.wait_for_timeout(1000)
             await page.keyboard.press("ArrowDown")
             await page.keyboard.press("Enter")
 
-            # Wait for submit button and click
-            await page.wait_for_selector("button[data-test='submit-button']", timeout=10000)
-            await page.click("button[data-test='submit-button']")
+            # Click "For Sale" to start search
+            await page.wait_for_selector("button:has-text('For sale')", timeout=5000)
+            await page.click("button:has-text('For sale')")
 
-            await page.wait_for_selector(".propertyCard-wrapper", timeout=30000)
-            properties = await page.query_selector_all(".propertyCard-wrapper")
+            await page.wait_for_selector(".propertyCard-wrapper", timeout=15000)
+            cards = await page.query_selector_all(".propertyCard-wrapper")
 
             results = []
-            for prop in properties[:10]:
-                title = await prop.inner_text() if prop else "N/A"
-                link_element = await prop.query_selector("a")
-                link = await link_element.get_attribute("href") if link_element else "#"
-                results.append({
-                    "title": title.strip().split("\n")[0],
-                    "url": f"https://www.rightmove.co.uk{link}" if link else "N/A"
-                })
+            for card in cards:
+                title = await card.inner_text()
+                results.append({"text": title})
 
             await browser.close()
             return results
 
-    except PlaywrightTimeoutError as e:
-        return JSONResponse(status_code=500, content={"error": f"Timeout: {str(e)}"})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return {"error": str(e)}
 
-@app.get("/view-source", response_class=HTMLResponse)
-async def view_source(town: str = Query(..., description="Town to search in")):
+@app.get("/view-source")
+async def view_source(town: str = Query(...)):
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto("https://www.rightmove.co.uk/", timeout=60000)
-
-            await page.wait_for_selector("input#searchLocation", timeout=15000)
-            await page.fill("input#searchLocation", town)
-            await page.wait_for_selector(".autoCompleteItem", timeout=10000)
+            context = await browser.new_context()
+            page = await context.new_page()
+            await page.goto("https://www.rightmove.co.uk/")
+            await page.wait_for_selector("input#ta_searchInput", timeout=15000)
+            await page.fill("input#ta_searchInput", town)
+            await page.wait_for_timeout(1000)
             await page.keyboard.press("ArrowDown")
             await page.keyboard.press("Enter")
-            await page.wait_for_selector("button[data-test='submit-button']", timeout=10000)
-            await page.click("button[data-test='submit-button']")
-
-            await page.wait_for_selector("body", timeout=15000)
+            await page.wait_for_selector("button:has-text('For sale')", timeout=5000)
+            await page.click("button:has-text('For sale')")
+            await page.wait_for_load_state("networkidle")
             content = await page.content()
             await browser.close()
-            return HTMLResponse(content=content)
-
+            return {"html": content}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return {"error": str(e)}}
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=10000)
