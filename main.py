@@ -1,10 +1,11 @@
 
 import subprocess
 from fastapi import FastAPI, Query
+from fastapi.responses import FileResponse
 from typing import Optional
 from playwright.sync_api import sync_playwright, TimeoutError
 
-# Install Chromium at startup
+# Install Chromium
 subprocess.run(["playwright", "install", "chromium"])
 
 app = FastAPI()
@@ -32,14 +33,14 @@ def search_properties(location: str = "London", max_price: Optional[int] = None)
         try:
             page.goto(search_url, timeout=60000)
 
-            # Accept cookies if banner is visible
+            # Accept cookies
             try:
                 page.wait_for_selector("button#onetrust-accept-btn-handler", timeout=5000)
                 page.click("button#onetrust-accept-btn-handler")
             except TimeoutError:
-                pass  # Cookie banner not present — continue
+                pass
 
-            # Wait for the listings container
+            # Try to wait for listings
             page.wait_for_selector(".propertyCard-wrapper", timeout=30000)
 
             cards = page.query_selector_all(".propertyCard-wrapper")
@@ -68,10 +69,19 @@ def search_properties(location: str = "London", max_price: Optional[int] = None)
                 })
 
         except TimeoutError as te:
-            return {"error": f"Timeout waiting for properties: {str(te)}"}
+            screenshot_path = "/tmp/debug.png"
+            page.screenshot(path=screenshot_path, full_page=True)
+            return {
+                "error": f"Timeout waiting for properties: {str(te)}",
+                "screenshot_url": "/debug-screenshot"
+            }
         except Exception as e:
             return {"error": f"Unexpected error: {str(e)}"}
         finally:
             browser.close()
 
     return listings
+
+@app.get("/debug-screenshot")
+def get_screenshot():
+    return FileResponse("/tmp/debug.png", media_type="image/png")
