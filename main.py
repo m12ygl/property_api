@@ -63,7 +63,7 @@ async def view_source(town: str = Query(...)):
             await browser.close()
             return {"html": content}
     except Exception as e:
-        return {"error": str(e)}}
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
