@@ -1,55 +1,55 @@
-
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 import asyncio
-import requests
 
 app = FastAPI()
 
-def get_location_identifier_from_town(town: str):
-    search_url = f"https://www.rightmove.co.uk/typeAhead/uknostreet/{town.replace(' ', '%20')}"
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-    response = requests.get(search_url, headers=headers)
-    
-    if response.status_code != 200:
-        return None
-
-    data = response.json()
-    if not data:
-        return None
-
-    return data[0]["locationIdentifier"]
+@app.get("/")
+def read_root():
+    return {"message": "UK Property Search API is running."}
 
 @app.get("/search-properties")
-async def search_properties(town: str = Query(...), max_price: int = Query(500000)):
-    location_identifier = get_location_identifier_from_town(town)
-    if not location_identifier:
-        return JSONResponse(status_code=400, content={"error": f"Could not find a locationIdentifier for '{town}'"})
+async def search_properties(town: str = Query(..., description="Town name, e.g., Harrow")):
+    url = f"https://www.rightmove.co.uk/property-for-sale/{town}.html"
 
-    url = f"https://www.rightmove.co.uk/property-for-sale/find.html?locationIdentifier={location_identifier}&maxPrice={max_price}&sortType=6&propertyTypes=&includeSSTC=false&mustHave=&dontShow=&furnishTypes=&keywords="
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(url, timeout=60000)
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page()
-        await page.goto(url)
-
-        try:
             await page.wait_for_selector(".propertyCard-wrapper", timeout=30000)
-        except:
+
+            properties = await page.locator(".propertyCard-wrapper").all()
+            results = []
+
+            for property_card in properties[:10]:
+                try:
+                    title = await property_card.locator(".propertyCard-title").inner_text()
+                except:
+                    title = "No title found"
+
+                try:
+                    price = await property_card.locator(".propertyCard-priceValue").inner_text()
+                except:
+                    price = "No price listed"
+
+                try:
+                    address = await property_card.locator(".propertyCard-address").inner_text()
+                except:
+                    address = "No address found"
+
+                results.append({
+                    "title": title.strip(),
+                    "price": price.strip(),
+                    "address": address.strip()
+                })
+
             await browser.close()
-            return JSONResponse(status_code=500, content={"error": "Timeout waiting for properties: Page.wait_for_selector: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator(\".propertyCard-wrapper\") to be visible\n"})
+            return results
 
-        properties = await page.query_selector_all(".propertyCard-wrapper")
-        results = []
-
-        for property_card in properties[:10]:  # Limit to top 10 results
-            title = await property_card.inner_text() if property_card else "No title"
-            results.append({
-                "summary": title.strip().replace("\n", " ")
-            })
-
-        await browser.close()
-        return results
+    except PlaywrightTimeout:
+        return JSONResponse(status_code=504, content={"error": "Timeout waiting for property cards."})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
