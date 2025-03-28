@@ -1,4 +1,3 @@
-
 import subprocess
 subprocess.run(["playwright", "install", "chromium"])
 
@@ -15,18 +14,24 @@ async def search_properties(town: str = Query(..., description="Town to search i
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
             await page.goto("https://www.rightmove.co.uk/", timeout=60000)
-            
-            # Fill search box and select from dropdown
+
+            # Ensure the input is present before trying to type
+            await page.wait_for_selector("input#searchLocation", timeout=15000)
             await page.fill("input#searchLocation", town)
+
+            # Wait for the autocomplete dropdown and select the first item
             await page.wait_for_selector(".autoCompleteItem", timeout=10000)
-            await page.click(".autoCompleteItem")
+            await page.keyboard.press("ArrowDown")
+            await page.keyboard.press("Enter")
+
+            # Wait for submit button and click
+            await page.wait_for_selector("button[data-test='submit-button']", timeout=10000)
             await page.click("button[data-test='submit-button']")
-            
-            # Wait for property cards to appear
+
             await page.wait_for_selector(".propertyCard-wrapper", timeout=30000)
             properties = await page.query_selector_all(".propertyCard-wrapper")
-            results = []
 
+            results = []
             for prop in properties[:10]:
                 title = await prop.inner_text() if prop else "N/A"
                 link_element = await prop.query_selector("a")
@@ -51,14 +56,16 @@ async def view_source(town: str = Query(..., description="Town to search in")):
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
             await page.goto("https://www.rightmove.co.uk/", timeout=60000)
-            
-            # Fill search box and select from dropdown
+
+            await page.wait_for_selector("input#searchLocation", timeout=15000)
             await page.fill("input#searchLocation", town)
             await page.wait_for_selector(".autoCompleteItem", timeout=10000)
-            await page.click(".autoCompleteItem")
+            await page.keyboard.press("ArrowDown")
+            await page.keyboard.press("Enter")
+            await page.wait_for_selector("button[data-test='submit-button']", timeout=10000)
             await page.click("button[data-test='submit-button']")
-            await page.wait_for_selector("body", timeout=15000)
 
+            await page.wait_for_selector("body", timeout=15000)
             content = await page.content()
             await browser.close()
             return HTMLResponse(content=content)
