@@ -1,13 +1,13 @@
-
-import subprocess
-import asyncio
 from fastapi import FastAPI, Query
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-
-# Ensure Chromium is installed
-subprocess.run(["playwright", "install", "chromium"])
+from fastapi.responses import JSONResponse
+from playwright.async_api import async_playwright
+import asyncio
 
 app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"message": "Rightmove Property API is running 🚀"}
 
 @app.get("/search-properties")
 async def search_properties(town: str = Query(..., description="The town to search properties in")):
@@ -16,7 +16,6 @@ async def search_properties(town: str = Query(..., description="The town to sear
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
             page = await context.new_page()
-
             await page.goto("https://www.rightmove.co.uk/")
 
             # Wait for and fill the search input
@@ -34,29 +33,48 @@ async def search_properties(town: str = Query(..., description="The town to sear
             except:
                 print("No cookie popup detected.")
 
-            # Click "For Sale"
+            # Force-remove the cookie overlay if it's still blocking interactions
+            try:
+                await page.evaluate("""
+                    () => {
+                        const el = document.getElementById('onetrust-consent-sdk');
+                        if (el) el.remove();
+                    }
+                """)
+                print("Forced removal of cookie overlay.")
+            except Exception as e:
+                print(f"No overlay removed: {e}")
+
+            # Click "For Sale" to start search
             await page.wait_for_selector("button:has-text('For sale')", timeout=5000)
             await page.click("button:has-text('For sale')")
 
-            # Wait for property cards
             await page.wait_for_selector(".propertyCard-wrapper", timeout=15000)
-            property_elements = await page.query_selector_all(".propertyCard-wrapper")
+            property_cards = await page.query_selector_all(".propertyCard-wrapper")
 
-            properties = []
-            for card in property_elements:
-                title = await card.inner_text()
-                properties.append(title.strip())
+            results = []
+            for card in property_cards:
+                title_el = await card.query_selector("h2")
+                link_el = await card.query_selector("a")
+                price_el = await card.query_selector(".propertyCard-priceValue")
+
+                title = await title_el.inner_text() if title_el else "No title"
+                link = await link_el.get_attribute("href") if link_el else "#"
+                price = await price_el.inner_text() if price_el else "No price"
+
+                results.append({
+                    "title": title.strip(),
+                    "price": price.strip(),
+                    "url": f"https://www.rightmove.co.uk{link}"
+                })
 
             await browser.close()
-            return {"results": properties[:10]}  # return first 10 for brevity
-
-    except PlaywrightTimeout as e:
-        return {"error": f"Timeout: {str(e)}"}
+            return results
     except Exception as e:
         return {"error": str(e)}
 
 @app.get("/view-source")
-async def view_source(town: str = Query(...)):
+async def view_source(town: str = Query(..., description="The town to search properties in")):
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -70,10 +88,10 @@ async def view_source(town: str = Query(...)):
             await page.keyboard.press("ArrowDown")
             await page.keyboard.press("Enter")
 
-            await page.wait_for_timeout(3000)
-            html = await page.content()
-            await browser.close()
-            return {"html": html[:3000]}  # Return first 3,000 characters for debugging
+            await page.wait_for_timeout(5000)
+            content = await page.content()
 
+            await browser.close()
+            return {"html": content}
     except Exception as e:
         return {"error": str(e)}
