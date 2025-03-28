@@ -31,7 +31,7 @@ async def search_properties(town: str = Query(..., description="The town to sear
             await accept_button.click()
             print("Accepted cookie popup.")
         except:
-            print("No cookie popup detected.")
+                print("No cookie popup detected.")
 
 
             # Click "For Sale" to start search
