@@ -1,76 +1,66 @@
 import subprocess
+import time
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, JSONResponse
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-import os
+from playwright.async_api import async_playwright
+import uvicorn
 
-# Ensure Chromium is installed
 subprocess.run(["playwright", "install", "chromium"])
 
 app = FastAPI()
 
+RIGHTMOVE_BASE_URL = "https://www.rightmove.co.uk/"
+
 @app.get("/")
-def home():
-    return {"message": "Property API is running. Use /search-properties?town=Harrow"}
+def read_root():
+    return {"message": "UK Property Scout is live."}
 
 @app.get("/search-properties")
 async def search_properties(
     town: str = Query(..., description="Town to search in"),
-    max_price: int = Query(500000, description="Max property price"),
-    radius: float = Query(0.25, ge=0.25, description="Search radius in miles (min 0.25)")
+    max_price: int = Query(500000, description="Maximum price filter"),
+    radius: float = Query(0.25, description="Search radius in miles")
 ):
-    search_url = (
-        f"https://www.rightmove.co.uk/property-for-sale/find.html"
-        f"?searchType=SALE"
-        f"&locationIdentifier={town}"
-        f"&radius={radius}"
-        f"&maxPrice={max_price}"
-        f"&sortType=6"
-    )
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context()
+            page = await context.new_page()
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
-        page = await context.new_page()
+            await page.goto(RIGHTMOVE_BASE_URL)
+            await page.fill("input#searchLocation", town)
+            await page.click("button[data-test='submit-button']")
 
-        try:
-            await page.goto(search_url, timeout=60000)
+            await page.wait_for_url("**/property-for-sale/**", timeout=10000)
 
-            # Wait for property cards
-            await page.wait_for_selector(".propertyCard-wrapper", timeout=40000)
+            # Adjust filters
+            await page.click("button[data-test='priceDropdown-toggle']")
+            await page.fill("input[data-test='maxPrice']", str(max_price))
+            await page.keyboard.press("Enter")
+
+            await page.click("button[data-test='radiusDropdown-toggle']")
+            radius_selector = f"li[data-test='radius-{str(radius).replace('.', '-')}-miles']"
+            if await page.locator(radius_selector).count():
+                await page.click(radius_selector)
+
+            await page.wait_for_selector(".propertyCard-wrapper", timeout=15000)
+
             cards = await page.locator(".propertyCard-wrapper").all()
             results = []
 
-            for card in cards[:5]:
-                title = await card.locator("h2.propertyCard-title").text_content() or "No title"
-                price = await card.locator(".propertyCard-priceValue").text_content() or "No price"
-                link = await card.locator("a[data-test='property-header']").get_attribute("href")
-                full_link = f"https://www.rightmove.co.uk{link}" if link else "N/A"
-
+            for card in cards:
+                title = await card.locator("[data-test='property-header']").text_content()
+                price = await card.locator(".propertyCard-priceValue").text_content()
+                link = await card.locator("a").first.get_attribute("href")
+                image = await card.locator("img").first.get_attribute("src")
                 results.append({
-                    "title": title.strip(),
-                    "price": price.strip(),
-                    "link": full_link
+                    "title": title.strip() if title else "N/A",
+                    "price": price.strip() if price else "N/A",
+                    "link": f"https://www.rightmove.co.uk{link}" if link else "N/A",
+                    "image": image if image else ""
                 })
 
             await browser.close()
             return results
 
-        except PlaywrightTimeout:
-            screenshot_path = "/tmp/debug.png"
-            await page.screenshot(path=screenshot_path, full_page=True)
-            await browser.close()
-            return {
-                "error": "Timeout waiting for properties.",
-                "screenshot": "/debug-screenshot"
-            }
-        except Exception as e:
-            await browser.close()
-            return JSONResponse(content={"error": str(e)}, status_code=500)
-
-@app.get("/debug-screenshot")
-def get_screenshot():
-    path = "/tmp/debug.png"
-    if os.path.exists(path):
-        return FileResponse(path, media_type="image/png")
-    return JSONResponse(content={"error": "No screenshot found."}, status_code=404)
+    except Exception as e:
+        return {"error": str(e)}
