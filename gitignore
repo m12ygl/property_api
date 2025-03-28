@@ -1,0 +1,18 @@
+
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+
+# VSCode settings (optional)
+.vscode/
+
+# macOS junk files
+.DS_Store
+
+# Render cache or temp files
+*.log
+*.sqlite3
